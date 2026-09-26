@@ -30,6 +30,7 @@ struct file_entrys {
   struct file_entry *data;
   size_t size;
   size_t selected;
+  size_t start;
   char *dir;
 };
 typedef struct file_entrys File_Entrys;
@@ -47,7 +48,7 @@ void print_image(View *image_view, char *dir, char *name);
 void set_image(char *dir, char *name);
 
 void select_entry(View *file_view, View *image_view, File_Entrys *entrys,
-                  size_t prev_entry);
+                  int operation);
 void open_entry(View *file_view, View *image_view, File_Entrys *entrys);
 void free_entrys(File_Entrys *entrys);
 
@@ -77,22 +78,9 @@ int main(void) {
     // TODO: check for resize
 
     if (ch == 'k' || ch == KEY_UP) {
-      size_t prev = entrys->selected;
-      if (prev == 0) {
-        entrys->selected = entrys->size - 1;
-      } else {
-        entrys->selected--;
-      }
-      select_entry(file_view, image_view, entrys, prev);
+      select_entry(file_view, image_view, entrys, -1);
     } else if (ch == 'j' || ch == KEY_DOWN) {
-      size_t prev = entrys->selected;
-      if (prev + 2 > entrys->size) {
-        entrys->selected = 0;
-      } else {
-        entrys->selected++;
-      }
-
-      select_entry(file_view, image_view, entrys, prev);
+      select_entry(file_view, image_view, entrys, +1);
     } else if (ch == 'o' || ch == '\n') {
       open_entry(file_view, image_view, entrys);
     } else if (ch == 's') {
@@ -119,6 +107,7 @@ void open_entry(View *file_view, View *image_view, File_Entrys *entrys) {
     list_files(file_view, entrys);
   } else {
     clear_view(image_view);
+    wrefresh(image_view->win);
     print_image(image_view, entrys->dir, entrys->data[entrys->selected].name);
   }
 }
@@ -148,32 +137,60 @@ void print_image(View *image_view, char *dir, char *name) {
     wrefresh(image_view->win);
   }
   free(path);
+  // TODO: wait for image to load/print before refreshing
   wrefresh(image_view->win);
 }
 
-void print_entry(View *file_view, size_t index, File_Entrys *entrys) {
+void print_entry(View *file_view, size_t index, size_t position,
+                 File_Entrys *entrys) {
   wchar_t *icon = (wchar_t *)IMAGE_ICON;
   if (entrys->data[index].type == DT_DIR) {
     icon = (wchar_t *)FOLDER_ICON;
   }
 
-  mvwprintw(file_view->win, index + 1, 1, " %ls %s", icon,
+  mvwprintw(file_view->win, position + 1, 1, " %ls %s", icon,
             entrys->data[index].name);
 
   if (entrys->selected == index) {
-    mvwchgat(file_view->win, index + 1, 1, file_view->width - 2, COLOR_PAIR(2),
-             1, NULL);
+    mvwchgat(file_view->win, position + 1, 1, file_view->width - 2,
+             COLOR_PAIR(2), 1, NULL);
   }
 }
 
 void select_entry(View *file_view, View *image_view, File_Entrys *entrys,
-                  size_t prev_entry) {
-  mvwchgat(file_view->win, prev_entry + 1, 1, file_view->width - 2,
-           COLOR_PAIR(2), 0, NULL);
-  mvwchgat(file_view->win, entrys->selected + 1, 1, file_view->width - 2,
-           COLOR_PAIR(2), 1, NULL);
+                  int operation) {
+  if (entrys->size == 0)
+    return;
+
+  int rows = file_view->height - 2;
+  int64_t selected = (int64_t)entrys->selected + operation;
+
+  if (selected < 0) {
+    selected = entrys->size - 1;
+  } else {
+    selected %= entrys->size;
+  }
+
+  entrys->selected = (size_t)selected;
+
+  if ((size_t)selected < entrys->start) {
+    entrys->start = (size_t)selected;
+  } else if ((size_t)selected >= entrys->start + (size_t)rows) {
+    entrys->start = (size_t)selected - (size_t)rows + 1;
+  }
+
+  if (entrys->size > (size_t)rows) {
+    size_t max_start = entrys->size - (size_t)rows;
+    if (entrys->start > max_start)
+      entrys->start = max_start;
+  } else {
+    entrys->start = 0;
+  }
+  clear_view(file_view);
+  list_files(file_view, entrys);
   wrefresh(file_view->win);
 
+  (void)image_view;
   /* TODO: show only after delay
   struct file_entry entry = entrys->data[entrys->selected];
   if (entry.type == DT_DIR)
@@ -239,11 +256,17 @@ void load_files(View *file_view, File_Entrys *entrys, char *path) {
 
   entrys->data = current_entrys;
   entrys->size = entrys_size;
+  entrys->start = 0;
 }
 
 void list_files(View *file_view, File_Entrys *entrys) {
-  for (size_t i = 0; i < entrys->size; i++) {
-    print_entry(file_view, i, entrys);
+
+  size_t end = (size_t)file_view->height - 2 > entrys->size
+                   ? entrys->size
+                   : (size_t)file_view->height - 2;
+
+  for (size_t i = 0; i < end; i++) {
+    print_entry(file_view, entrys->start + i, i, entrys);
   }
 
   wrefresh(file_view->win);
